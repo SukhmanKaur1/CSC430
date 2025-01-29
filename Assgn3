@@ -1,1 +1,74 @@
+#lang typed/racket
+(require typed/rackunit)
+; Add #:transparent to each struct
+(struct numC ([n : Real]) #:transparent)
+(struct idC ([s : Symbol]) #:transparent)
+(struct appC ([f : ExprC] [args : (Listof ExprC)]) #:transparent)
+(struct plusC ([l : ExprC] [r : ExprC]) #:transparent)
+(struct multC ([l : ExprC] [r : ExprC]) #:transparent)
+(struct ifleq0?C ([test : ExprC] [then : ExprC] [else : ExprC]) #:transparent)
+(struct FundefC ([name : Symbol] [arg : Symbol] [body : ExprC]) #:transparent)
+(define-type ExprC (U numC idC appC plusC multC ifleq0?C))
 
+;; interp
+(define (interp [a : ExprC][fds : (Listof FundefC)]) : Real
+  (match a
+    [(numC n) n]
+    [(plusC l r) (+ (interp l fds) (interp r fds))]  ; Added fds
+    [(multC l r) (* (interp l fds) (interp r fds))]  ; Added fds
+    [(idC s) (error 'interp "QWJZ: identifiers not yet implemented")]
+    [(appC f args) (error 'interp "QWJZ: function application not yet implemented")]
+    [(ifleq0?C test then else) 
+     (if (<= (interp test fds) 0)  ; Added fds
+         (interp then fds)          ; Added fds
+         (interp else fds))]))      ; Added fds
+
+;; Tests for interp
+(check-equal? (interp (multC (numC 2) (numC 3)) '()) 6)  ; Added empty list
+(check-exn #rx"QWJZ" (lambda () (interp (idC 'x) '()))) 
+(check-exn #rx"QWJZ" (lambda () (interp (appC (numC 1) (list (numC 2))) '())))
+(check-equal? (interp (ifleq0?C (numC 0) (numC 1) (numC 2)) '()) 1)
+(check-equal? (interp (ifleq0?C (numC -3) (numC 1) (numC 2)) '()) 1)
+(check-equal? (interp (ifleq0?C (numC 5) (numC 1) (numC 2)) '()) 2)
+
+
+;;parse
+(define (parse [expr : Sexp]) : ExprC 
+  (match expr
+    [(? real? n) (numC n)]
+    [(? symbol? s) (idC s)]       ; New case to handle symbols like 'x'
+    [(list '+ l r) (plusC (parse l) (parse r))]
+    [(list '* l r) (multC (parse l) (parse r))]
+    [(list 'ifleq0? test then else) (ifleq0?C (parse test) 
+                                             (parse then) 
+                                             (parse else))]
+    [other (error 'parse "QWJZ: invalid syntax, got ~e" other)]))
+
+; Add a test for parsing identifiers
+(check-equal? (parse 'x) (idC 'x))
+;; Tests for parse
+(check-equal? (parse '{* 2 3}) (multC (numC 2) (numC 3)))
+
+;; top-interp
+(define (top-interp [s : Sexp]) : Real
+  (interp (parse s) '()))  ; Added empty list
+
+;; Tests for top-interp
+(check-equal? (top-interp 5) 5)
+(check-equal? (top-interp '{+ 2 3}) 5)
+(check-exn #rx"QWJZ" (lambda () (top-interp '{})))
+(check-equal? (top-interp '{ifleq0? 0 1 2}) 1)
+(check-equal? (top-interp '{ifleq0? {+ 3 -5} 1 2}) 1)
+(check-exn #rx"QWJZ" (lambda () (top-interp '{ifleq0? 0})))
+
+;; parse-fundef (stays the same)
+(define (parse-fundef [s : Sexp]) : FundefC
+  (match s
+    [(list (? symbol? f) '= (list 'proc (list (? symbol? x)) body))
+     (FundefC f x (parse body))]
+    [other (error 'parse-fundef "QWJZ: invalid function syntax, got ~e" other)]))
+
+;; Tests for parse-fundef
+(check-equal? (parse-fundef '{double = {proc (x) {+ x x}}})
+              (FundefC 'double 'x (plusC (idC 'x) (idC 'x))))
+(check-exn #rx"QWJZ" (lambda () (parse-fundef '{f = x})))
